@@ -10,9 +10,14 @@ moment a new row lands in the `jobs` table. Runs:
         -> upsert prospect -> write claims -> format transcript
         -> upload results -> update job row
 
+org_id/prospect_id are read directly from the webhook payload (Supabase
+includes the full inserted row as `record`), not via a follow-up get_job()
+call — that follow-up call raced against Supabase's own read-after-write
+consistency and intermittently came back without org_id, causing every
+extraction to silently skip writing claims.
+
 Processing happens in a plain daemon thread, not FastAPI's BackgroundTasks —
-BackgroundTasks was confirmed not to actually execute on this deployment,
-so this uses a more direct mechanism instead.
+BackgroundTasks was confirmed not to actually execute on this deployment.
 """
 
 from __future__ import annotations
@@ -35,7 +40,6 @@ from ingest import ingest
 from prospect_matching import ProspectCandidate, find_matching_prospect
 from supabase_client import (
     download_raw_file,
-    get_job,
     get_org_prospect_candidates,
     insert_claims,
     update_job,
@@ -52,11 +56,6 @@ app = FastAPI(title="primer backend")
 def health():
     return {"status": "ok"}
 
-@app.get("/debug/job/{job_id}")
-def debug_job(job_id: str):
-    from supabase_client import get_job
-    job = get_job(job_id)
-    return {"job": job, "keys": list(job.keys()) if job else None}
 
 def _text_passthrough(raw_text: str) -> CompareResult:
     seg = FinalSegment(start=0.0, end=0.0, speaker="TEXT", text=raw_text, status="agreed")
@@ -115,9 +114,6 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
 
     return prospect_id
 
-def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
-    print(f"[job {job_id}] RECEIVED org_id={org_id!r} existing_prospect_id={existing_prospect_id!r}")
-    work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
 
 def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
@@ -177,11 +173,11 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
         )
         print(f"[job {job_id}] done")
 
-    except Exception as exc:  # noqa: BLE001 — a failed job must still update its own status, never hang as "processing" forever
+    except Exception as exc:  # noqa: BLE001
         print(f"[job {job_id}] FAILED: {exc}\n{traceback.format_exc()}")
         try:
             update_job(job_id, status="failed", error=str(exc))
-        except Exception as update_exc:  # noqa: BLE001 — the failure-reporter must never itself throw uncaught
+        except Exception as update_exc:  # noqa: BLE001
             print(f"[job {job_id}] ALSO FAILED to record failure status: {update_exc}")
     finally:
         shutil.rmtree(work_dir, ignore_errors=True)
@@ -192,6 +188,9 @@ async def job_created_webhook(
     request: Request,
     x_webhook_secret: str | None = Header(default=None),
 ):
+    if WEBHOOK.secret and x_webhook_secret != WEBHOOK.secret:
+        raise HTTPException(status_code=401, detail="invalid webhook secret")
+
     payload = await request.json()
     record = payload.get("record") or payload.get("new") or {}
     job_id = record.get("id")
