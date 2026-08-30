@@ -35,7 +35,11 @@ class DeepgramSettings:
 @dataclass
 class GeminiSettings:
     api_key: str | None = field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
-    model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL") or "gemini-3.5-flash")
+    # Default to 2.5 Flash — it has a meaningfully higher, more established
+    # free-tier daily request quota than the newer 3.5 Flash, which matters
+    # a lot given how many Gemini calls this pipeline makes per job. Still
+    # override via GEMINI_MODEL in .env if your quota situation changes.
+    model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL") or "gemini-2.5-flash")
 
 
 @dataclass

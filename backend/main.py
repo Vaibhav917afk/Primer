@@ -55,7 +55,7 @@ from supabase_client import (
 )
 from transcribe_deepgram import transcribe_with_deepgram
 from transcribe_gemini import transcribe_with_gemini
-from verify import verify_claim
+from verify import verify_claims_batch
 
 app = FastAPI(title="primer backend")
 
@@ -169,8 +169,12 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
 
 
 def _run_verify_stage(job_id: str, transcript_text: str, claims: list[dict]) -> None:
-    for claim in claims:
-        update = verify_claim(transcript_text, claim, GEMINI)
+    """One batched call per round instead of one call per claim — see
+    verify.py's docstring for why this matters (Gemini's daily free-tier
+    quota is trivially exhausted by the per-claim design on even a
+    handful of test jobs)."""
+    updates = verify_claims_batch(transcript_text, claims, GEMINI)
+    for claim, update in zip(claims, updates):
         update_claim(
             claim["id"],
             status=update.status,
