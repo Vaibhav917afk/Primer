@@ -14,8 +14,8 @@ from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz
 
-from .config import CompareSettings, GeminiSettings
-from .transcribe_whisperx import Segment
+from config import CompareSettings, GeminiSettings
+from transcribe_whisperx import Segment
 
 
 @dataclass

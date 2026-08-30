@@ -10,7 +10,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import AUDIO_EXTENSIONS, TEXT_EXTENSIONS, VIDEO_EXTENSIONS
+from config import AUDIO_EXTENSIONS, TEXT_EXTENSIONS, VIDEO_EXTENSIONS
 
 ArtifactType = str
 

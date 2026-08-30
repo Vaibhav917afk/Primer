@@ -17,8 +17,8 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import GeminiSettings
-from .transcribe_whisperx import Segment
+from config import GeminiSettings
+from transcribe_whisperx import Segment
 
 PROMPT = """You are transcribing a business conversation (sales call, meeting, or similar).
 

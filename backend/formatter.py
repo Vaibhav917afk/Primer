@@ -10,7 +10,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from .compare import CompareResult
+from compare import CompareResult
 
 STATUS_MARK = {
     "agreed": "",

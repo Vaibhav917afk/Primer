@@ -23,13 +23,13 @@ from pathlib import Path
 
 from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
 
-from .compare import CompareResult, FinalSegment, compare_transcripts
-from .config import COMPARE, DEEPGRAM, GEMINI, WEBHOOK
-from .formatter import write_outputs
-from .ingest import ingest
-from .supabase_client import download_raw_file, update_job, upload_output_file
-from .transcribe_deepgram import transcribe_with_deepgram
-from .transcribe_gemini import transcribe_with_gemini
+from compare import CompareResult, FinalSegment, compare_transcripts
+from config import COMPARE, DEEPGRAM, GEMINI, WEBHOOK
+from formatter import write_outputs
+from ingest import ingest
+from supabase_client import download_raw_file, update_job, upload_output_file
+from transcribe_deepgram import transcribe_with_deepgram
+from transcribe_gemini import transcribe_with_gemini
 
 app = FastAPI(title="primer backend")
 

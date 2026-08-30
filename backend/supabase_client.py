@@ -15,7 +15,7 @@ from pathlib import Path
 
 from supabase import Client, create_client
 
-from .config import SUPABASE
+from config import SUPABASE
 
 _client: Client | None = None
 

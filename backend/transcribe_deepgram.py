@@ -19,8 +19,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from pathlib import Path
 
-from .config import DeepgramSettings
-from .transcribe_whisperx import Segment
+from config import DeepgramSettings
+from transcribe_whisperx import Segment
 
 
 @dataclass
