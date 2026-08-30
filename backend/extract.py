@@ -64,7 +64,7 @@ Extract:
 4. pain_points: a problem in the prospect's CURRENT situation, even if not directly about us (e.g. "our current process is manual and slow").
 5. commitments: an EXPLICIT agreement or confirmation to do something. This requires a clear yes/confirmation from whoever is responsible for it. A question, request, or proposal ALONE is NOT a commitment — if nobody actually agreed to it in this excerpt, it belongs under open_questions instead.
 6. open_questions: a question or requested next step raised in this excerpt that does NOT have a clear agreement attached within this excerpt. Example: someone asks "can you send a proposal by Friday" and nobody confirms yes — that is an open_question, never a commitment.
-7. risk_signals: anything suggesting this deal could stall or fail — needing another stakeholder's approval, a vague or distant timeline, evaluating a competitor, budget uncertainty.
+7. risk_signals: anything suggesting this deal could stall or fail — needing another stakeholder's approval, a vague or distant timeline, evaluating a competitor, budget uncertainty. Do NOT restate a concern already captured as an objection — a risk_signal should reveal something an objection alone doesn't (e.g. not just "pricing is a concern" again, but specifically that budget approval requires someone else's sign-off, or that a decision is being delayed for an unstated reason).
 
 Every item in 2-7 needs the exact quote it came from and which speaker_label said it.
 

@@ -35,11 +35,12 @@ class DeepgramSettings:
 @dataclass
 class GeminiSettings:
     api_key: str | None = field(default_factory=lambda: os.getenv("GEMINI_API_KEY"))
-    # Default to 2.5 Flash — it has a meaningfully higher, more established
-    # free-tier daily request quota than the newer 3.5 Flash, which matters
-    # a lot given how many Gemini calls this pipeline makes per job. Still
-    # override via GEMINI_MODEL in .env if your quota situation changes.
-    model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL") or "gemini-2.5-flash")
+    # Model names retire fast on Gemini's free tier — 2.5 Flash and 3.5
+    # Flash both got deprecated/quota-restricted mid-build. Follow
+    # whatever Google's own 404/429 error tells you to switch to; as of
+    # now that's 3.6 Flash. Override via GEMINI_MODEL in .env without
+    # needing a code change if this happens again.
+    model: str = field(default_factory=lambda: os.getenv("GEMINI_MODEL") or "gemini-3.6-flash")
 
 
 @dataclass
