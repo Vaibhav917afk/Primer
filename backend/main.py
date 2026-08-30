@@ -192,6 +192,7 @@ async def job_created_webhook(
         raise HTTPException(status_code=401, detail="invalid webhook secret")
 
     payload = await request.json()
+    print(f"[webhook] RAW PAYLOAD: {payload}")
     record = payload.get("record") or payload.get("new") or {}
     job_id = record.get("id")
     storage_path = record.get("file_path")
