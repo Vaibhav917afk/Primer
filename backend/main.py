@@ -115,6 +115,9 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
 
     return prospect_id
 
+def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
+    print(f"[job {job_id}] RECEIVED org_id={org_id!r} existing_prospect_id={existing_prospect_id!r}")
+    work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
 
 def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
