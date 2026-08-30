@@ -54,6 +54,32 @@ def update_job(job_id: str, **fields) -> None:
     client.table("jobs").update(fields).eq("id", job_id).execute()
 
 
+def get_org_prospect_candidates(org_id: str) -> list[dict]:
+    """Fetch minimal prospect identity fields for matching — kept
+    separate from full prospect records so this stays a cheap query."""
+    client = get_client()
+    res = client.table("prospects").select("id, name, company, email").eq("org_id", org_id).execute()
+    return res.data or []
+
+
+def upsert_prospect(org_id: str, prospect_id: str | None, fields: dict) -> str:
+    """Updates the existing prospect if prospect_id is given, otherwise
+    creates a new one. Returns the prospect's id either way."""
+    client = get_client()
+    if prospect_id:
+        client.table("prospects").update(fields).eq("id", prospect_id).execute()
+        return prospect_id
+    res = client.table("prospects").insert({**fields, "org_id": org_id}).select().single().execute()
+    return res.data["id"]
+
+
+def insert_claims(rows: list[dict]) -> None:
+    if not rows:
+        return
+    client = get_client()
+    client.table("claims").insert(rows).execute()
+
+
 def get_job(job_id: str) -> dict | None:
     client = get_client()
     res = client.table("jobs").select("*").eq("id", job_id).single().execute()

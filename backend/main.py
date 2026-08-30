@@ -6,7 +6,9 @@ Webhook (via a SQL trigger executing supabase_functions.http_request) the
 moment a new row lands in the `jobs` table. Runs:
 
     download from Storage -> ingest -> [deepgram, gemini] in parallel
-        -> compare -> format -> upload results -> update job row
+        -> compare -> extract (persona/interests/objections/commitments)
+        -> upsert prospect -> write claims -> format transcript
+        -> upload results -> update job row
 
 Processing happens in a plain daemon thread, not FastAPI's BackgroundTasks —
 BackgroundTasks was confirmed not to actually execute on this deployment,
@@ -27,9 +29,19 @@ from fastapi import FastAPI, Header, HTTPException, Request
 
 from compare import CompareResult, FinalSegment, compare_transcripts
 from config import COMPARE, DEEPGRAM, GEMINI, WEBHOOK
+from extract import extract_from_transcript
 from formatter import write_outputs
 from ingest import ingest
-from supabase_client import download_raw_file, update_job, upload_output_file
+from prospect_matching import ProspectCandidate, find_matching_prospect
+from supabase_client import (
+    download_raw_file,
+    get_job,
+    get_org_prospect_candidates,
+    insert_claims,
+    update_job,
+    upload_output_file,
+    upsert_prospect,
+)
 from transcribe_deepgram import transcribe_with_deepgram
 from transcribe_gemini import transcribe_with_gemini
 
@@ -38,7 +50,6 @@ app = FastAPI(title="primer backend")
 
 @app.get("/health")
 def health():
-    """Render (and you) can hit this to confirm the service is actually up."""
     return {"status": "ok"}
 
 
@@ -47,10 +58,66 @@ def _text_passthrough(raw_text: str) -> CompareResult:
     return CompareResult(segments=[seg], disagreement_count=0, agreement_count=1)
 
 
+def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: str | None, transcript_text: str) -> str | None:
+    if not transcript_text.strip():
+        print(f"[job {job_id}] nothing to extract — empty transcript")
+        return existing_prospect_id
+
+    result = extract_from_transcript(transcript_text, GEMINI)
+    for note in result.notes:
+        print(f"[job {job_id}] [extract] {note}")
+
+    prospect_id = existing_prospect_id
+    if org_id:
+        if not prospect_id:
+            candidates_raw = get_org_prospect_candidates(org_id)
+            candidates = [
+                ProspectCandidate(id=c["id"], name=c.get("name"), company=c.get("company"), email=c.get("email"))
+                for c in candidates_raw
+            ]
+            prospect_id = find_matching_prospect(result.persona, candidates)
+
+        persona_fields = {
+            k: v
+            for k, v in {
+                "name": result.persona.name,
+                "role_title": result.persona.role,
+                "company": result.persona.company,
+                "email": result.persona.email,
+            }.items()
+            if v is not None
+        }
+        if persona_fields:
+            prospect_id = upsert_prospect(org_id, prospect_id, persona_fields)
+
+    if prospect_id:
+        claim_rows = [
+            {
+                "job_id": job_id,
+                "prospect_id": prospect_id,
+                "field": item.field,
+                "text": item.text,
+                "evidence_line": item.evidence_line,
+                "status": "pending",
+                "retries": 0,
+            }
+            for item in result.items
+        ]
+        insert_claims(claim_rows)
+        print(f"[job {job_id}] [extract] wrote {len(claim_rows)} claims, prospect_id={prospect_id}")
+    else:
+        print(f"[job {job_id}] [extract] no org_id/prospect on this job — extracted {len(result.items)} items but couldn't link them to a prospect yet")
+
+    return prospect_id
+
+
 def process_job(job_id: str, storage_path: str) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
     try:
         update_job(job_id, status="processing")
+        job = get_job(job_id)
+        org_id = job.get("org_id") if job else None
+        existing_prospect_id = job.get("prospect_id") if job else None
 
         local_path = download_raw_file(storage_path, work_dir)
         ingested = ingest(local_path, work_dir=work_dir)
@@ -87,6 +154,9 @@ def process_job(job_id: str, storage_path: str) -> None:
                     notes=["gemini path unavailable — no cross-check was possible for this run"],
                 )
 
+        full_text = " ".join(seg.text for seg in result.segments if seg.text)
+        prospect_id = _run_extract_stage(job_id, org_id, existing_prospect_id, full_text)
+
         md_path, json_path = write_outputs(result, local_path.name, work_dir)
 
         stem = Path(storage_path).stem
@@ -96,6 +166,7 @@ def process_job(job_id: str, storage_path: str) -> None:
         update_job(
             job_id,
             status="done",
+            prospect_id=prospect_id,
             transcript_md_path=f"{stem}/{md_path.name}",
             transcript_json=json.loads(json_path.read_text()),
         )
@@ -120,7 +191,6 @@ async def job_created_webhook(
         raise HTTPException(status_code=401, detail="invalid webhook secret")
 
     payload = await request.json()
-    # Supabase Database Webhook payload shape: {"type": "INSERT", "table": "jobs", "record": {...}, ...}
     record = payload.get("record") or payload.get("new") or {}
     job_id = record.get("id")
     storage_path = record.get("file_path")

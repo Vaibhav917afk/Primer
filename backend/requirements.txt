@@ -6,6 +6,10 @@ uvicorn[standard]==0.32.0
 python-dotenv==1.0.1
 rapidfuzz==3.9.6
 
+# --- preprocess: lightweight chunking (TF-IDF, no pretrained model downloads) ---
+scikit-learn>=1.5.0
+numpy>=1.26.0
+
 # --- hosted transcription (both paths, no local ML) ---
 deepgram-sdk>=3.0.0
 google-genai>=2.0.0
