@@ -110,7 +110,7 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
         insert_claims(claim_rows)
         print(f"[job {job_id}] [extract] wrote {len(claim_rows)} claims, prospect_id={prospect_id}")
     else:
-        print(f"[job {job_id}] [extract] no org_id/prospect on this job — extracted {len(result.items)} items but couldn't link them to a prospect yet")
+        print(f"[job {job_id}] [extract] org_id={org_id!r} but no prospect could be resolved (persona: {result.persona}) — extracted {len(result.items)} items, none linked")
 
     return prospect_id
 
