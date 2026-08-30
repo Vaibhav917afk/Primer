@@ -2,14 +2,15 @@
 main — FastAPI app for the deployed primer backend.
 
 One real endpoint: POST /webhook/job-created, called by a Supabase Database
-Webhook the moment a new row lands in the `jobs` table. Runs:
+Webhook (via a SQL trigger executing supabase_functions.http_request) the
+moment a new row lands in the `jobs` table. Runs:
 
     download from Storage -> ingest -> [deepgram, gemini] in parallel
         -> compare -> format -> upload results -> update job row
 
-Processing happens in a background task so the webhook gets an immediate
-200 response (Supabase's webhook has its own timeout — we don't want a
-30-minute video transcription blocking that response).
+Processing happens in a plain daemon thread, not FastAPI's BackgroundTasks —
+BackgroundTasks was confirmed not to actually execute on this deployment,
+so this uses a more direct mechanism instead.
 """
 
 from __future__ import annotations
@@ -17,11 +18,12 @@ from __future__ import annotations
 import json
 import shutil
 import tempfile
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
-from fastapi import BackgroundTasks, FastAPI, Header, HTTPException, Request
+from fastapi import FastAPI, Header, HTTPException, Request
 
 from compare import CompareResult, FinalSegment, compare_transcripts
 from config import COMPARE, DEEPGRAM, GEMINI, WEBHOOK
@@ -39,16 +41,6 @@ def health():
     """Render (and you) can hit this to confirm the service is actually up."""
     return {"status": "ok"}
 
-@app.get("/debug/supabase")
-def debug_supabase():
-    import traceback
-    try:
-        from supabase_client import get_client
-        client = get_client()
-        res = client.table("jobs").select("id").limit(1).execute()
-        return {"connected": True, "sample": res.data}
-    except Exception as exc:  # noqa: BLE001
-        return {"connected": False, "error": str(exc), "trace": traceback.format_exc()}
 
 def _text_passthrough(raw_text: str) -> CompareResult:
     seg = FinalSegment(start=0.0, end=0.0, speaker="TEXT", text=raw_text, status="agreed")
@@ -122,7 +114,6 @@ def process_job(job_id: str, storage_path: str) -> None:
 @app.post("/webhook/job-created")
 async def job_created_webhook(
     request: Request,
-    background_tasks: BackgroundTasks,
     x_webhook_secret: str | None = Header(default=None),
 ):
     if WEBHOOK.secret and x_webhook_secret != WEBHOOK.secret:
@@ -137,5 +128,6 @@ async def job_created_webhook(
     if not job_id or not storage_path:
         raise HTTPException(status_code=400, detail="payload missing id/file_path")
 
-    background_tasks.add_task(process_job, job_id, storage_path)
+    thread = threading.Thread(target=process_job, args=(job_id, storage_path), daemon=True)
+    thread.start()
     return {"accepted": True, "job_id": job_id}
