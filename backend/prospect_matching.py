@@ -1,8 +1,8 @@
 """
-prospect_matching — decides whether extracted persona info belongs to an
-existing prospect (someone we've already talked to, possibly across
-several past calls — the actual "nothing connects call 1 to call 5"
-problem this whole project exists to solve) or is a new person.
+prospect_matching — decides whether the identified PROSPECT participant
+belongs to an existing prospect record (someone we've already talked to,
+possibly across several past calls — the actual "nothing connects call 1
+to call 5" problem this project exists to solve) or is a new person.
 
 Kept as a pure function, separate from the Supabase call that fetches the
 candidate list, so the matching logic itself is fully unit-testable.
@@ -12,7 +12,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from extract import ExtractedPersona
+from extract import Participant
 
 
 @dataclass
@@ -23,7 +23,7 @@ class ProspectCandidate:
     email: str | None
 
 
-def find_matching_prospect(persona: ExtractedPersona, candidates: list[ProspectCandidate]) -> str | None:
+def find_matching_prospect(persona: Participant, candidates: list[ProspectCandidate]) -> str | None:
     """Returns the matching prospect's id, or None if this looks like a
     new person. Matching priority: exact email (most reliable identifier)
     first, then name+company together (a name alone is too ambiguous —

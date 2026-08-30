@@ -6,9 +6,16 @@ Webhook (via a SQL trigger executing supabase_functions.http_request) the
 moment a new row lands in the `jobs` table. Runs:
 
     download from Storage -> ingest -> [deepgram, gemini] in parallel
-        -> compare -> extract (persona/interests/objections/commitments)
+        -> compare -> extract (participants/interests/objections/commitments,
+           SPEAKER-LABELED transcript so rep vs prospect can be told apart)
         -> upsert prospect -> write claims -> verify claims
         -> format transcript -> upload results -> update job row
+
+The transcript handed to extract() preserves per-segment speaker labels
+(SPEAKER_00: ..., SPEAKER_01: ...) — an earlier version flattened all
+segments into one undifferentiated block of text, which made it
+impossible for extract to tell the rep and the prospect apart, or to
+attribute an objection/interest to the right person. That's fixed here.
 
 org_id/prospect_id are read directly from the webhook payload (Supabase
 includes the full inserted row as `record`) rather than via a follow-up
@@ -63,14 +70,47 @@ def _text_passthrough(raw_text: str) -> CompareResult:
     return CompareResult(segments=[seg], disagreement_count=0, agreement_count=1)
 
 
+def _build_speaker_labeled_text(segments) -> str:
+    """The single most important line in this file: WITHOUT speaker labels
+    preserved here, extract() cannot tell who said what, cannot identify
+    rep vs prospect, and cannot attribute an objection to the right person.
+    This was a real, silent bug in an earlier version."""
+    lines = []
+    current_speaker = None
+    for seg in segments:
+        if not seg.text:
+            continue
+        if seg.speaker != current_speaker:
+            lines.append(f"{seg.speaker}: {seg.text}")
+            current_speaker = seg.speaker
+        else:
+            lines[-1] += f" {seg.text}"
+    return "\n".join(lines)
+
+
 def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: str | None, transcript_text: str):
     if not transcript_text.strip():
         print(f"[job {job_id}] nothing to extract — empty transcript")
-        return existing_prospect_id, []
+        return existing_prospect_id, [], {"topics": [], "entities": []}
 
     result = extract_from_transcript(transcript_text, GEMINI)
     for note in result.notes:
         print(f"[job {job_id}] [extract] {note}")
+
+    extra_meta = {
+        "topics": result.topics,
+        "entities": [{"text": e.text, "type": e.type, "evidence": e.evidence_line} for e in result.entities],
+        "participants": [
+            {"speaker_label": p.speaker_label, "name": p.name, "role_in_call": p.role_in_call,
+             "role_title": p.role_title, "company": p.company}
+            for p in result.participants
+        ],
+    }
+
+    prospect_participant = result.prospect()
+    if prospect_participant is None:
+        print(f"[job {job_id}] [extract] no speaker was identified as the prospect (participants: {len(result.participants)}) — nothing linked")
+        return existing_prospect_id, [], extra_meta
 
     prospect_id = existing_prospect_id
     if org_id:
@@ -80,15 +120,15 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
                 ProspectCandidate(id=c["id"], name=c.get("name"), company=c.get("company"), email=c.get("email"))
                 for c in candidates_raw
             ]
-            prospect_id = find_matching_prospect(result.persona, candidates)
+            prospect_id = find_matching_prospect(prospect_participant, candidates)
 
         persona_fields = {
             k: v
             for k, v in {
-                "name": result.persona.name,
-                "role_title": result.persona.role,
-                "company": result.persona.company,
-                "email": result.persona.email,
+                "name": prospect_participant.name,
+                "role_title": prospect_participant.role_title,
+                "company": prospect_participant.company,
+                "email": prospect_participant.email,
             }.items()
             if v is not None
         }
@@ -97,6 +137,16 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
 
     written_claims: list[dict] = []
     if prospect_id:
+        # interests/objections are specifically the PROSPECT's — filter to
+        # their speaker_label. commitments can reasonably come from either
+        # party (the rep committing to send a proposal matters just as
+        # much as the prospect committing to review it), so those are kept
+        # regardless of who said them.
+        relevant_items = [
+            item for item in result.items
+            if item.field == "commitment" or item.speaker_label == prospect_participant.speaker_label
+        ]
+
         claim_rows = [
             {
                 "job_id": job_id,
@@ -104,23 +154,21 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
                 "field": item.field,
                 "text": item.text,
                 "evidence_line": item.evidence_line,
+                "speaker_label": item.speaker_label,
                 "status": "pending",
                 "retries": 0,
             }
-            for item in result.items
+            for item in relevant_items
         ]
         written_claims = insert_claims(claim_rows)
         print(f"[job {job_id}] [extract] wrote {len(written_claims)} claims, prospect_id={prospect_id}")
     else:
-        print(f"[job {job_id}] [extract] no persona info extracted — {len(result.items)} items couldn't be linked to a prospect")
+        print(f"[job {job_id}] [extract] prospect identified but no org_id on this job — nothing could be linked")
 
-    return prospect_id, written_claims
+    return prospect_id, written_claims, extra_meta
 
 
 def _run_verify_stage(job_id: str, transcript_text: str, claims: list[dict]) -> None:
-    """Independently double-checks every claim extract() wrote. Each claim
-    resolves to confirmed or partial — never left stuck as pending, never
-    silently dropped."""
     for claim in claims:
         update = verify_claim(transcript_text, claim, GEMINI)
         update_claim(
@@ -173,11 +221,11 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
                     notes=["gemini path unavailable — no cross-check was possible for this run"],
                 )
 
-        full_text = " ".join(seg.text for seg in result.segments if seg.text)
-        prospect_id, written_claims = _run_extract_stage(job_id, org_id, existing_prospect_id, full_text)
+        speaker_labeled_text = _build_speaker_labeled_text(result.segments)
+        prospect_id, written_claims, extra_meta = _run_extract_stage(job_id, org_id, existing_prospect_id, speaker_labeled_text)
 
         if written_claims:
-            _run_verify_stage(job_id, full_text, written_claims)
+            _run_verify_stage(job_id, speaker_labeled_text, written_claims)
 
         md_path, json_path = write_outputs(result, local_path.name, work_dir)
 
@@ -185,12 +233,15 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
         upload_output_file(md_path, f"{stem}/{md_path.name}")
         upload_output_file(json_path, f"{stem}/{json_path.name}")
 
+        transcript_json = json.loads(json_path.read_text())
+        transcript_json.update(extra_meta)
+
         update_job(
             job_id,
             status="done",
             prospect_id=prospect_id,
             transcript_md_path=f"{stem}/{md_path.name}",
-            transcript_json=json.loads(json_path.read_text()),
+            transcript_json=transcript_json,
         )
         print(f"[job {job_id}] done")
 
