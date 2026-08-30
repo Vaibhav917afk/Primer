@@ -7,8 +7,8 @@ moment a new row lands in the `jobs` table. Runs:
 
     download from Storage -> ingest -> [deepgram, gemini] in parallel
         -> compare -> extract (persona/interests/objections/commitments)
-        -> upsert prospect -> write claims -> format transcript
-        -> upload results -> update job row
+        -> upsert prospect -> write claims -> verify claims
+        -> format transcript -> upload results -> update job row
 
 org_id/prospect_id are read directly from the webhook payload (Supabase
 includes the full inserted row as `record`) rather than via a follow-up
@@ -41,12 +41,14 @@ from supabase_client import (
     download_raw_file,
     get_org_prospect_candidates,
     insert_claims,
+    update_claim,
     update_job,
     upload_output_file,
     upsert_prospect,
 )
 from transcribe_deepgram import transcribe_with_deepgram
 from transcribe_gemini import transcribe_with_gemini
+from verify import verify_claim
 
 app = FastAPI(title="primer backend")
 
@@ -61,10 +63,10 @@ def _text_passthrough(raw_text: str) -> CompareResult:
     return CompareResult(segments=[seg], disagreement_count=0, agreement_count=1)
 
 
-def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: str | None, transcript_text: str) -> str | None:
+def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: str | None, transcript_text: str):
     if not transcript_text.strip():
         print(f"[job {job_id}] nothing to extract — empty transcript")
-        return existing_prospect_id
+        return existing_prospect_id, []
 
     result = extract_from_transcript(transcript_text, GEMINI)
     for note in result.notes:
@@ -93,6 +95,7 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
         if persona_fields:
             prospect_id = upsert_prospect(org_id, prospect_id, persona_fields)
 
+    written_claims: list[dict] = []
     if prospect_id:
         claim_rows = [
             {
@@ -106,12 +109,28 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
             }
             for item in result.items
         ]
-        insert_claims(claim_rows)
-        print(f"[job {job_id}] [extract] wrote {len(claim_rows)} claims, prospect_id={prospect_id}")
+        written_claims = insert_claims(claim_rows)
+        print(f"[job {job_id}] [extract] wrote {len(written_claims)} claims, prospect_id={prospect_id}")
     else:
         print(f"[job {job_id}] [extract] no persona info extracted — {len(result.items)} items couldn't be linked to a prospect")
 
-    return prospect_id
+    return prospect_id, written_claims
+
+
+def _run_verify_stage(job_id: str, transcript_text: str, claims: list[dict]) -> None:
+    """Independently double-checks every claim extract() wrote. Each claim
+    resolves to confirmed or partial — never left stuck as pending, never
+    silently dropped."""
+    for claim in claims:
+        update = verify_claim(transcript_text, claim, GEMINI)
+        update_claim(
+            claim["id"],
+            status=update.status,
+            text=update.text,
+            evidence_line=update.evidence_line,
+            retries=update.retries,
+        )
+        print(f"[job {job_id}] [verify] claim {claim['id']} ({claim['field']}) -> {update.status} (retries={update.retries})")
 
 
 def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
@@ -155,7 +174,10 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
                 )
 
         full_text = " ".join(seg.text for seg in result.segments if seg.text)
-        prospect_id = _run_extract_stage(job_id, org_id, existing_prospect_id, full_text)
+        prospect_id, written_claims = _run_extract_stage(job_id, org_id, existing_prospect_id, full_text)
+
+        if written_claims:
+            _run_verify_stage(job_id, full_text, written_claims)
 
         md_path, json_path = write_outputs(result, local_path.name, work_dir)
 
