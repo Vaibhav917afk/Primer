@@ -116,13 +116,10 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
     return prospect_id
 
 
-def process_job(job_id: str, storage_path: str) -> None:
+def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
     try:
         update_job(job_id, status="processing")
-        job = get_job(job_id)
-        org_id = job.get("org_id") if job else None
-        existing_prospect_id = job.get("prospect_id") if job else None
 
         local_path = download_raw_file(storage_path, work_dir)
         ingested = ingest(local_path, work_dir=work_dir)
@@ -192,17 +189,16 @@ async def job_created_webhook(
     request: Request,
     x_webhook_secret: str | None = Header(default=None),
 ):
-    if WEBHOOK.secret and x_webhook_secret != WEBHOOK.secret:
-        raise HTTPException(status_code=401, detail="invalid webhook secret")
-
     payload = await request.json()
     record = payload.get("record") or payload.get("new") or {}
     job_id = record.get("id")
     storage_path = record.get("file_path")
+    org_id = record.get("org_id")
+    prospect_id = record.get("prospect_id")
 
     if not job_id or not storage_path:
         raise HTTPException(status_code=400, detail="payload missing id/file_path")
 
-    thread = threading.Thread(target=process_job, args=(job_id, storage_path), daemon=True)
+    thread = threading.Thread(target=process_job, args=(job_id, storage_path, org_id, prospect_id), daemon=True)
     thread.start()
     return {"accepted": True, "job_id": job_id}
