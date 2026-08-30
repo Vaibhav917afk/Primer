@@ -11,10 +11,9 @@ moment a new row lands in the `jobs` table. Runs:
         -> upload results -> update job row
 
 org_id/prospect_id are read directly from the webhook payload (Supabase
-includes the full inserted row as `record`), not via a follow-up get_job()
-call — that follow-up call raced against Supabase's own read-after-write
-consistency and intermittently came back without org_id, causing every
-extraction to silently skip writing claims.
+includes the full inserted row as `record`) rather than via a follow-up
+get_job() call — that follow-up call raced against Supabase's own
+read-after-write consistency and intermittently came back without org_id.
 
 Processing happens in a plain daemon thread, not FastAPI's BackgroundTasks —
 BackgroundTasks was confirmed not to actually execute on this deployment.
@@ -110,7 +109,7 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
         insert_claims(claim_rows)
         print(f"[job {job_id}] [extract] wrote {len(claim_rows)} claims, prospect_id={prospect_id}")
     else:
-        print(f"[job {job_id}] [extract] org_id={org_id!r} but no prospect could be resolved (persona: {result.persona}) — extracted {len(result.items)} items, none linked")
+        print(f"[job {job_id}] [extract] no persona info extracted — {len(result.items)} items couldn't be linked to a prospect")
 
     return prospect_id
 
@@ -192,7 +191,6 @@ async def job_created_webhook(
         raise HTTPException(status_code=401, detail="invalid webhook secret")
 
     payload = await request.json()
-    print(f"[webhook] RAW PAYLOAD: {payload}")
     record = payload.get("record") or payload.get("new") or {}
     job_id = record.get("id")
     storage_path = record.get("file_path")
