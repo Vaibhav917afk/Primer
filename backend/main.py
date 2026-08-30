@@ -40,7 +40,7 @@ from fastapi import FastAPI, Header, HTTPException, Request
 
 from compare import CompareResult, FinalSegment, compare_transcripts
 from config import COMPARE, DEEPGRAM, GEMINI, WEBHOOK
-from extract import extract_from_transcript
+from extract import PROSPECT_ONLY_FIELDS, extract_from_transcript
 from formatter import write_outputs
 from ingest import ingest
 from prospect_matching import ProspectCandidate, find_matching_prospect
@@ -129,6 +129,7 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
                 "role_title": prospect_participant.role_title,
                 "company": prospect_participant.company,
                 "email": prospect_participant.email,
+                "persona_overview": prospect_participant.persona_overview,
             }.items()
             if v is not None
         }
@@ -137,14 +138,13 @@ def _run_extract_stage(job_id: str, org_id: str | None, existing_prospect_id: st
 
     written_claims: list[dict] = []
     if prospect_id:
-        # interests/objections are specifically the PROSPECT's — filter to
-        # their speaker_label. commitments can reasonably come from either
-        # party (the rep committing to send a proposal matters just as
-        # much as the prospect committing to review it), so those are kept
-        # regardless of who said them.
+        # interest/objection/pain_point/risk_signal are specifically about
+        # assessing the PROSPECT — filtered to their speaker_label.
+        # commitment/open_question matter regardless of who raised them
+        # (an open loop is an open loop no matter who left it open).
         relevant_items = [
             item for item in result.items
-            if item.field == "commitment" or item.speaker_label == prospect_participant.speaker_label
+            if item.field not in PROSPECT_ONLY_FIELDS or item.speaker_label == prospect_participant.speaker_label
         ]
 
         claim_rows = [

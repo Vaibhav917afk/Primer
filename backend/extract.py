@@ -1,22 +1,38 @@
 """
 extract — reads the (possibly chunked) transcript and pulls out, per
-distinct speaker: identity (name/role/company/email) and whether they're
-the sales rep or the prospect — plus interests, objections, and
-commitments each tied to both a transcript quote AND which speaker said
-it, a handful of named entities mentioned (companies/products/competitors),
-and lightweight topic labels for the excerpt.
+distinct speaker: identity (name/role/company/persona overview) and
+whether they're the sales rep or the prospect — plus a full set of
+claim types tied to both a transcript quote and which speaker said it,
+named entities mentioned, and lightweight topic labels.
 
-This requires the transcript text to carry speaker labels (SPEAKER_00: ...
-per line) — passing in undifferentiated text makes correct rep-vs-prospect
-identification and per-item speaker attribution impossible, which was a
-real bug in an earlier version of this pipeline (main.py was flattening
-segments into one block of text with no speaker labels at all before
-handing it to extract).
+Claim fields, and why each exists:
+  - interest      genuine positive interest in something specific
+  - objection     pushback or concern directed AT us/our product/pricing
+  - pain_point    a problem in their current situation, not necessarily
+                   about us — context that makes the pitch land better
+  - commitment    an EXPLICIT agreement/confirmation to do something —
+                   requires a real yes, not just a request or proposal
+  - open_question a question or request raised with NO clear agreement
+                   attached in this excerpt — this is the fix for a real
+                   bug: "can you send a proposal by Friday?" was getting
+                   misclassified as a commitment just because it mentioned
+                   a next step, when nobody had actually said yes to it
+  - risk_signal   anything suggesting the deal could stall — needing
+                   another stakeholder's approval, a vague timeline,
+                   evaluating a competitor. This directly feeds the future
+                   score step, which needs real evidence to justify a risk
+                   number rather than inventing one.
+
+interest/objection/pain_point/risk_signal are about assessing the PROSPECT
+specifically, so main.py filters these to the identified prospect's
+speaker_label. commitment/open_question matter regardless of who raised
+them (an open loop is an open loop no matter who left it open), so those
+are kept unfiltered.
 
 Design note on claim.status: the original design used a 3-state model
 (confirmed/partial/omitted) decided at verify-time. At extract-time, list-
-type fields (objections/interests/commitments) represent "nothing found"
-simply by having zero rows — no placeholder needed.
+type fields represent "nothing found" simply by having zero rows — no
+placeholder needed.
 """
 
 from __future__ import annotations
@@ -28,7 +44,8 @@ from dataclasses import dataclass, field
 from config import GeminiSettings
 from preprocess import Chunk, chunk_transcript
 
-ITEM_FIELDS = ["interest", "objection", "commitment"]
+ITEM_FIELDS = ["interest", "objection", "pain_point", "commitment", "open_question", "risk_signal"]
+PROSPECT_ONLY_FIELDS = {"interest", "objection", "pain_point", "risk_signal"}
 ROLE_VALUES = {"rep", "prospect", "other", "unknown"}
 
 PROMPT_TEMPLATE = """You are analyzing part of a business conversation transcript (a sales call, meeting, or similar). Each line is labeled with who is speaking — SPEAKER_00, SPEAKER_01, etc. The same label always refers to the same person throughout this excerpt.
@@ -36,25 +53,37 @@ PROMPT_TEMPLATE = """You are analyzing part of a business conversation transcrip
 Read the transcript excerpt below and extract ONLY what is actually said — never invent or infer beyond the text.
 
 Extract:
-1. participants: every distinct speaker_label that appears. For each, identify {{name, role_in_call, role_title, company, email}}:
-   - role_in_call must be exactly one of "rep" (represents the company doing the selling/pitching), "prospect" (the customer/lead being sold to), "other" (a third party, e.g. another attendee who is neither), or "unknown" (can't be determined from this excerpt).
-   - Omit any field not actually stated (use null) — do not guess a name or company that isn't said.
-2. interests: things the PROSPECT expressed genuine interest in. Each needs the exact quote and which speaker_label said it.
-3. objections: concerns, pushback, or hesitations raised (usually by the prospect, but attribute to whoever actually said it). Each needs the exact quote and speaker_label.
-4. commitments: promises or next steps either party agreed to. Each needs the exact quote and speaker_label.
-5. entities: other named things mentioned in passing — competitor products, other companies, integrations, tools. Each needs a short label, a type ("company"|"product"|"other"), and the exact quote.
-6. topics: 1-4 short topic labels (2-4 words each) describing what this excerpt covers, e.g. "pricing", "onboarding timeline", "integration requirements".
-7. sentiment: one of "positive", "neutral", "negative", or "mixed" — the PROSPECT's tone specifically (not the rep's) in this excerpt. Omit (null) if unclear or no prospect speech is present.
+
+1. participants: every distinct speaker_label that appears. For each, identify {{name, role_in_call, role_title, company, email, persona_overview}}:
+   - role_in_call must be exactly one of "rep" (represents the company doing the selling/pitching), "prospect" (the customer/lead being sold to), "other", or "unknown".
+   - persona_overview: ONLY for the prospect — a single sentence describing who they are and how they communicate (e.g. "Ops-focused decision maker, direct and data-driven, sensitive to rollout timelines"), based only on what's actually shown in this excerpt. Omit (null) if there isn't enough to say anything real.
+   - Omit any field not actually stated (use null) — do not guess a name, company, or email that isn't said.
+
+2. interests: things the PROSPECT expressed genuine positive interest in.
+3. objections: concerns or pushback directed AT us, our product, or our pricing.
+4. pain_points: a problem in the prospect's CURRENT situation, even if not directly about us (e.g. "our current process is manual and slow").
+5. commitments: an EXPLICIT agreement or confirmation to do something. This requires a clear yes/confirmation from whoever is responsible for it. A question, request, or proposal ALONE is NOT a commitment — if nobody actually agreed to it in this excerpt, it belongs under open_questions instead.
+6. open_questions: a question or requested next step raised in this excerpt that does NOT have a clear agreement attached within this excerpt. Example: someone asks "can you send a proposal by Friday" and nobody confirms yes — that is an open_question, never a commitment.
+7. risk_signals: anything suggesting this deal could stall or fail — needing another stakeholder's approval, a vague or distant timeline, evaluating a competitor, budget uncertainty.
+
+Every item in 2-7 needs the exact quote it came from and which speaker_label said it.
+
+8. entities: other named things mentioned in passing — competitor products, other companies, integrations, tools. Each needs a short label, a type ("company"|"product"|"other"), and the exact quote.
+9. topics: 1-4 short topic labels (2-4 words each) describing what this excerpt covers.
+10. sentiment: one of "positive", "neutral", "negative", or "mixed" — the PROSPECT's tone specifically in this excerpt. Omit (null) if unclear or no prospect speech is present.
 
 Return ONLY valid JSON, no markdown fences, no commentary, matching exactly this shape:
 
 {{
   "participants": [
-    {{"speaker_label": "SPEAKER_00", "name": null, "role_in_call": "unknown", "role_title": null, "company": null, "email": null}}
+    {{"speaker_label": "SPEAKER_00", "name": null, "role_in_call": "unknown", "role_title": null, "company": null, "email": null, "persona_overview": null}}
   ],
   "interests": [{{"text": "...", "evidence": "exact quote", "speaker_label": "SPEAKER_01"}}],
   "objections": [{{"text": "...", "evidence": "exact quote", "speaker_label": "SPEAKER_01"}}],
+  "pain_points": [{{"text": "...", "evidence": "exact quote", "speaker_label": "SPEAKER_01"}}],
   "commitments": [{{"text": "...", "evidence": "exact quote", "speaker_label": "SPEAKER_00"}}],
+  "open_questions": [{{"text": "...", "evidence": "exact quote", "speaker_label": "SPEAKER_01"}}],
+  "risk_signals": [{{"text": "...", "evidence": "exact quote", "speaker_label": "SPEAKER_01"}}],
   "entities": [{{"text": "...", "type": "company", "evidence": "exact quote"}}],
   "topics": ["..."],
   "sentiment": null
@@ -83,6 +112,7 @@ class Participant:
     role_title: str | None = None
     company: str | None = None
     email: str | None = None
+    persona_overview: str | None = None
 
 
 @dataclass
@@ -111,10 +141,6 @@ class ExtractionResult:
     notes: list[str] = field(default_factory=list)
 
     def prospect(self) -> Participant | None:
-        """The primary prospect for this conversation, if one was
-        identifiable. If multiple speakers were marked "prospect", the
-        first one found wins — multi-prospect calls are a known
-        simplification, not yet fully supported."""
         for p in self.participants:
             if p.role_in_call == "prospect":
                 return p
@@ -133,6 +159,11 @@ def _extract_json(text: str) -> dict:
     return json.loads(text)
 
 
+def _field_to_key(field_name: str) -> str:
+    """interest -> interests, pain_point -> pain_points, etc."""
+    return f"{field_name}s"
+
+
 def parse_extraction_response(raw_text: str) -> ChunkExtraction:
     parsed = _extract_json(raw_text)
 
@@ -149,12 +180,13 @@ def parse_extraction_response(raw_text: str) -> ChunkExtraction:
                 role_title=p.get("role_title"),
                 company=p.get("company"),
                 email=p.get("email"),
+                persona_overview=p.get("persona_overview"),
             )
         )
 
     items: list[ExtractedItem] = []
     for field_name in ITEM_FIELDS:
-        for entry in parsed.get(f"{field_name}s", []) or []:
+        for entry in parsed.get(_field_to_key(field_name), []) or []:
             text = str(entry.get("text", "")).strip()
             if not text:
                 continue
@@ -179,13 +211,6 @@ def parse_extraction_response(raw_text: str) -> ChunkExtraction:
 
 
 def merge_chunk_results(chunk_results: list[ChunkExtraction]) -> ExtractionResult:
-    """Merges every chunk's extraction into one result.
-
-    Participants: merged by speaker_label — the same speaker across chunks
-    should be one entry, not duplicated. Fields fill in first-non-null; a
-    role_in_call of "unknown" gets upgraded if a later chunk determines it
-    more specifically (a person might not be identifiable as rep/prospect
-    until later in the call)."""
     participants_by_label: dict[str, Participant] = {}
     all_items: list[ExtractedItem] = []
     all_entities: list[ExtractedEntity] = []
@@ -204,6 +229,7 @@ def merge_chunk_results(chunk_results: list[ChunkExtraction]) -> ExtractionResul
                 existing.role_title = existing.role_title or p.role_title
                 existing.company = existing.company or p.company
                 existing.email = existing.email or p.email
+                existing.persona_overview = existing.persona_overview or p.persona_overview
                 if existing.role_in_call == "unknown" and p.role_in_call != "unknown":
                     existing.role_in_call = p.role_in_call
 
@@ -220,7 +246,6 @@ def merge_chunk_results(chunk_results: list[ChunkExtraction]) -> ExtractionResul
         winners = [s for s, c in counts.items() if c == max_count]
         overall_sentiment = winners[0] if len(winners) == 1 else "mixed"
 
-    # dedupe topics case-insensitively, preserve first-seen order
     seen_topics = set()
     deduped_topics = []
     for t in all_topics:
@@ -251,9 +276,6 @@ def _call_gemini_extract(transcript_chunk: str, settings: GeminiSettings) -> str
 
 
 def extract_from_transcript(transcript_text: str, settings: GeminiSettings) -> ExtractionResult:
-    """transcript_text MUST have speaker labels per line (e.g. "SPEAKER_00:
-    ...") — see main.py's transcript assembly. Without them, participant
-    identification and per-item speaker attribution degrade to guessing."""
     if not settings.api_key:
         raise RuntimeError("GEMINI_API_KEY is not set — check .env / Render environment")
 
