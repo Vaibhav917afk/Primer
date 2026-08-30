@@ -52,6 +52,11 @@ app = FastAPI(title="primer backend")
 def health():
     return {"status": "ok"}
 
+@app.get("/debug/job/{job_id}")
+def debug_job(job_id: str):
+    from supabase_client import get_job
+    job = get_job(job_id)
+    return {"job": job, "keys": list(job.keys()) if job else None}
 
 def _text_passthrough(raw_text: str) -> CompareResult:
     seg = FinalSegment(start=0.0, end=0.0, speaker="TEXT", text=raw_text, status="agreed")
