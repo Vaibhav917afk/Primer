@@ -1,0 +1,22 @@
+# --- web server ---
+fastapi==0.115.0
+uvicorn[standard]==0.32.0
+
+# --- core ---
+python-dotenv==1.0.1
+rapidfuzz==3.9.6
+
+# --- hosted transcription (both paths, no local ML) ---
+deepgram-sdk>=3.0.0
+google-genai>=2.0.0
+
+# --- Supabase ---
+# Not pinned to 2.9.0 — that version caps httpx<0.28, which conflicts with
+# google-genai's httpx>=0.28.1 requirement. Let pip resolve a compatible pair.
+supabase>=2.10.0
+
+# NOTE: whisperx / faster-whisper / torch are intentionally NOT listed here.
+# transcribe_whisperx.py is a dormant local-dev-only fallback — installing
+# its dependencies would push this service past Render's free-tier 512MB
+# RAM limit. See transcribe_whisperx.py's docstring if you ever want to run
+# it locally for comparison.
