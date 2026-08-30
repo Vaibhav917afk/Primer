@@ -39,17 +39,16 @@ def health():
     """Render (and you) can hit this to confirm the service is actually up."""
     return {"status": "ok"}
 
-@app.get("/debug/run/{job_id}/{storage_path}")
-def debug_run(job_id: str, storage_path: str):
-    """TEMPORARY — runs process_job synchronously so failures show up
-    directly in the HTTP response instead of possibly getting lost in
-    background-task logging. Remove this once things are working."""
+@app.get("/debug/supabase")
+def debug_supabase():
     import traceback
     try:
-        process_job(job_id, storage_path)
-        return {"completed": True}
+        from supabase_client import get_client
+        client = get_client()
+        res = client.table("jobs").select("id").limit(1).execute()
+        return {"connected": True, "sample": res.data}
     except Exception as exc:  # noqa: BLE001
-        return {"completed": False, "error": str(exc), "trace": traceback.format_exc()}
+        return {"connected": False, "error": str(exc), "trace": traceback.format_exc()}
 
 def _text_passthrough(raw_text: str) -> CompareResult:
     seg = FinalSegment(start=0.0, end=0.0, speaker="TEXT", text=raw_text, status="agreed")
