@@ -69,8 +69,8 @@ def upsert_prospect(org_id: str, prospect_id: str | None, fields: dict) -> str:
     if prospect_id:
         client.table("prospects").update(fields).eq("id", prospect_id).execute()
         return prospect_id
-    res = client.table("prospects").insert({**fields, "org_id": org_id}).select().single().execute()
-    return res.data["id"]
+    res = client.table("prospects").insert({**fields, "org_id": org_id}).execute()
+    return res.data[0]["id"]
 
 
 def insert_claims(rows: list[dict]) -> None:
