@@ -105,6 +105,17 @@ def get_open_claims_for_prospect(prospect_id: str, exclude_job_id: str) -> list[
     return res.data or []
 
 
+def get_claims_by_state(prospect_id: str, state: str) -> list[dict]:
+    client = get_client()
+    res = client.table("claims").select("*").eq("prospect_id", prospect_id).eq("state", state).execute()
+    return res.data or []
+
+
+def update_prospect(prospect_id: str, **fields) -> None:
+    client = get_client()
+    client.table("prospects").update(fields).eq("id", prospect_id).execute()
+
+
 def get_job(job_id: str) -> dict | None:
     client = get_client()
     res = client.table("jobs").select("*").eq("id", job_id).single().execute()

@@ -46,18 +46,21 @@ from ingest import ingest
 from prospect_matching import ProspectCandidate, find_matching_prospect
 from supabase_client import (
     download_raw_file,
+    get_claims_by_state,
     get_claims_for_job,
     get_open_claims_for_prospect,
     get_org_prospect_candidates,
     insert_claims,
     update_claim,
     update_job,
+    update_prospect,
     upload_output_file,
     upsert_prospect,
 )
 from transcribe_deepgram import transcribe_with_deepgram
 from transcribe_gemini import transcribe_with_gemini
 from reconcile_state import ExistingClaim, NewClaim, reconcile_claims
+from score import score_prospect
 from verify import verify_claims_batch
 
 app = FastAPI(title="primer backend")
@@ -235,6 +238,36 @@ def _run_reconcile_stage(job_id: str, prospect_id: str) -> None:
             print(f"[job {job_id}] [reconcile] claim {resolved_id} marked resolved")
 
 
+def _run_score_stage(job_id: str, prospect_id: str) -> None:
+    """Deterministic rubric scoring (zero API calls) + one evidence-
+    grounded narrative + its own bounded verify pass."""
+    open_claims = get_claims_by_state(prospect_id, "open")
+    resolved_claims = get_claims_by_state(prospect_id, "resolved")
+
+    result, narrative = score_prospect(open_claims, resolved_claims, GEMINI)
+
+    update_prospect(
+        prospect_id,
+        interest_score=result.interest_score,
+        risk_score=result.risk_score,
+        risk_level=result.risk_level,
+        score_summary=narrative.summary,
+        score_status=narrative.status,
+        score_breakdown={
+            "interest_factors": [
+                {"label": f.label, "points": f.points, "claim_ids": f.claim_ids} for f in result.interest_factors
+            ],
+            "risk_factors": [
+                {"label": f.label, "points": f.points, "claim_ids": f.claim_ids} for f in result.risk_factors
+            ],
+        },
+    )
+    print(
+        f"[job {job_id}] [score] interest={result.interest_score} risk={result.risk_score} "
+        f"({result.risk_level}) narrative={narrative.status} (retries={narrative.retries})"
+    )
+
+
 def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
     try:
@@ -282,6 +315,7 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
             _run_verify_stage(job_id, speaker_labeled_text, written_claims)
             if prospect_id:
                 _run_reconcile_stage(job_id, prospect_id)
+                _run_score_stage(job_id, prospect_id)
 
         md_path, json_path = write_outputs(result, local_path.name, work_dir)
 
