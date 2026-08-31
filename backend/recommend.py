@@ -1,13 +1,13 @@
 """
 recommend — turns the prospect's current, verified profile (open claims +
 score) into a concrete next step for the rep: how to open the next
-conversation, and the single most important thing to do next.
+conversation, specific talking points, what to avoid, and the single most
+important thing to do next.
 
 Deliberately has NO separate verify stage, unlike extract/verify and
 score/verify_score — by this point every claim and the score itself have
 already been independently verified. recommend is synthesis over already-
-trustworthy information, not new fact-generation, so re-verifying it
-would be checking a checker.
+trustworthy information, not new fact-generation.
 
 Still grounded, not free-form: the prompt is given ONLY the actual open
 claims and told to cite which ones informed the recommendation. The code
@@ -16,15 +16,14 @@ the real claim list — a cheap, deterministic check, not a second LLM
 call, so a hallucinated evidence pointer can't silently slip through.
 
 If a prospect has NO open claims at all, this skips the LLM call entirely
-and returns a sensible default — there's nothing to ground a
-recommendation on, and no reason to spend a call inventing one.
+and returns a sensible default.
 """
 
 from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 from config import GeminiSettings
 
@@ -41,10 +40,12 @@ Open claims on file (each has an id):
 Produce:
 1. recommended_opening: a natural, specific way to open the NEXT conversation with this prospect (1-2 sentences).
 2. next_best_action: the single most important concrete thing the rep should do before or during that call (1 sentence).
-3. grounding_claim_ids: which of the claim ids above most directly informed this recommendation.
+3. talking_points: 2-4 short, specific things worth actively raising or reinforcing in the next call.
+4. avoid: 1-3 short things the rep should NOT do or bring up (e.g. don't re-raise a resolved objection, don't rush a hesitant buyer).
+5. grounding_claim_ids: which of the claim ids above most directly informed this recommendation.
 
 Return ONLY valid JSON, no markdown fences, no commentary:
-{{"recommended_opening": "...", "next_best_action": "...", "grounding_claim_ids": ["id1", "id2"]}}
+{{"recommended_opening": "...", "next_best_action": "...", "talking_points": ["...", "..."], "avoid": ["...", "..."], "grounding_claim_ids": ["id1", "id2"]}}
 """
 
 DEFAULT_NO_CLAIMS_OPENING = "No open items on file for this prospect — a simple check-in maintains the relationship."
@@ -56,6 +57,8 @@ class Recommendation:
     recommended_opening: str
     next_best_action: str
     grounding_claim_ids: list[str]
+    talking_points: list[str] = field(default_factory=list)
+    avoid: list[str] = field(default_factory=list)
 
 
 def _format_claims_block(claims: list[dict]) -> str:
@@ -90,6 +93,8 @@ def parse_recommend_response(raw_text: str, open_claims: list[dict]) -> Recommen
     return Recommendation(
         recommended_opening=str(parsed.get("recommended_opening", "")).strip(),
         next_best_action=str(parsed.get("next_best_action", "")).strip(),
+        talking_points=[str(t).strip() for t in (parsed.get("talking_points") or []) if str(t).strip()],
+        avoid=[str(a).strip() for a in (parsed.get("avoid") or []) if str(a).strip()],
         grounding_claim_ids=cited,
     )
 
@@ -112,5 +117,7 @@ def recommend_next_action(prospect: dict, open_claims: list[dict], settings: Gem
             recommended_opening=DEFAULT_NO_CLAIMS_OPENING,
             next_best_action=DEFAULT_NO_CLAIMS_ACTION,
             grounding_claim_ids=[],
+            talking_points=[],
+            avoid=[],
         )
     return _call_gemini_recommend(prospect, open_claims, settings)

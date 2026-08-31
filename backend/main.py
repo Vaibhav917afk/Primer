@@ -55,6 +55,7 @@ from supabase_client import (
     get_prospect,
     insert_claims,
     insert_recommendation,
+    insert_score_history,
     update_claim,
     update_job,
     update_prospect,
@@ -193,6 +194,7 @@ def _run_verify_stage(job_id: str, transcript_text: str, claims: list[dict]) -> 
             text=update.text,
             evidence_line=update.evidence_line,
             retries=update.retries,
+            verification_note=update.note,
         )
         print(f"[job {job_id}] [verify] claim {claim['id']} ({claim['field']}) -> {update.status} (retries={update.retries})")
 
@@ -273,6 +275,15 @@ def _run_score_stage(job_id: str, prospect_id: str) -> None:
         f"({result.risk_level}) narrative={narrative.status} (retries={narrative.retries})"
     )
 
+    insert_score_history(
+        {
+            "prospect_id": prospect_id,
+            "job_id": job_id,
+            "interest_score": result.interest_score,
+            "risk_score": result.risk_score,
+        }
+    )
+
 
 def _run_recommend_stage(job_id: str, prospect_id: str) -> None:
     """Synthesizes the current open claims + just-computed score into a
@@ -292,6 +303,8 @@ def _run_recommend_stage(job_id: str, prospect_id: str) -> None:
             "job_id": job_id,
             "recommended_opening": rec.recommended_opening,
             "next_best_action": rec.next_best_action,
+            "talking_points": rec.talking_points,
+            "avoid": rec.avoid,
             "grounding_claim_ids": rec.grounding_claim_ids,
         }
     )

@@ -140,6 +140,24 @@ def get_latest_recommendation(prospect_id: str) -> dict | None:
     return res.data[0] if res.data else None
 
 
+def insert_score_history(row: dict) -> None:
+    client = get_client()
+    client.table("score_history").insert(row).execute()
+
+
+def get_score_history(prospect_id: str, limit: int = 20) -> list[dict]:
+    client = get_client()
+    res = (
+        client.table("score_history")
+        .select("*")
+        .eq("prospect_id", prospect_id)
+        .order("created_at", desc=False)
+        .limit(limit)
+        .execute()
+    )
+    return res.data or []
+
+
 def get_job(job_id: str) -> dict | None:
     client = get_client()
     res = client.table("jobs").select("*").eq("id", job_id).single().execute()
