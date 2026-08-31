@@ -81,14 +81,15 @@ def transcribe_with_gemini(source_path: Path, settings: GeminiSettings) -> Gemin
 
     from google import genai
 
+    from retry_utils import call_with_retry
+
     client = genai.Client(api_key=settings.api_key)
 
     print(f"[gemini] uploading {source_path.name} for model={settings.model}")
     uploaded = _upload_file(client, source_path)
 
-    response = client.models.generate_content(
-        model=settings.model,
-        contents=[uploaded, PROMPT],
+    response = call_with_retry(
+        lambda: client.models.generate_content(model=settings.model, contents=[uploaded, PROMPT])
     )
 
     raw_text = response.text

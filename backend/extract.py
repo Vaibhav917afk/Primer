@@ -270,8 +270,12 @@ def merge_chunk_results(chunk_results: list[ChunkExtraction]) -> ExtractionResul
 def _call_gemini_extract(transcript_chunk: str, settings: GeminiSettings) -> str:
     from google import genai
 
+    from retry_utils import call_with_retry
+
     client = genai.Client(api_key=settings.api_key)
-    response = client.models.generate_content(model=settings.model, contents=build_prompt(transcript_chunk))
+    response = call_with_retry(
+        lambda: client.models.generate_content(model=settings.model, contents=build_prompt(transcript_chunk))
+    )
     return response.text
 
 
