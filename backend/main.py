@@ -50,7 +50,9 @@ from supabase_client import (
     get_claims_for_job,
     get_open_claims_for_prospect,
     get_org_prospect_candidates,
+    get_prospect,
     insert_claims,
+    insert_recommendation,
     update_claim,
     update_job,
     update_prospect,
@@ -60,6 +62,7 @@ from supabase_client import (
 from transcribe_deepgram import transcribe_with_deepgram
 from transcribe_gemini import transcribe_with_gemini
 from reconcile_state import ExistingClaim, NewClaim, reconcile_claims
+from recommend import recommend_next_action
 from score import score_prospect
 from verify import verify_claims_batch
 
@@ -268,6 +271,30 @@ def _run_score_stage(job_id: str, prospect_id: str) -> None:
     )
 
 
+def _run_recommend_stage(job_id: str, prospect_id: str) -> None:
+    """Synthesizes the current open claims + just-computed score into a
+    concrete next step. No separate verify stage here — see recommend.py's
+    docstring for why (everything feeding it is already verified)."""
+    prospect = get_prospect(prospect_id)
+    if not prospect:
+        print(f"[job {job_id}] [recommend] couldn't load prospect {prospect_id}, skipping")
+        return
+
+    open_claims = get_claims_by_state(prospect_id, "open")
+    rec = recommend_next_action(prospect, open_claims, GEMINI)
+
+    insert_recommendation(
+        {
+            "prospect_id": prospect_id,
+            "job_id": job_id,
+            "recommended_opening": rec.recommended_opening,
+            "next_best_action": rec.next_best_action,
+            "grounding_claim_ids": rec.grounding_claim_ids,
+        }
+    )
+    print(f"[job {job_id}] [recommend] next_best_action: {rec.next_best_action}")
+
+
 def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
     try:
@@ -316,6 +343,7 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
             if prospect_id:
                 _run_reconcile_stage(job_id, prospect_id)
                 _run_score_stage(job_id, prospect_id)
+                _run_recommend_stage(job_id, prospect_id)
 
         md_path, json_path = write_outputs(result, local_path.name, work_dir)
 

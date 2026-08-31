@@ -116,6 +116,17 @@ def update_prospect(prospect_id: str, **fields) -> None:
     client.table("prospects").update(fields).eq("id", prospect_id).execute()
 
 
+def get_prospect(prospect_id: str) -> dict | None:
+    client = get_client()
+    res = client.table("prospects").select("*").eq("id", prospect_id).single().execute()
+    return res.data
+
+
+def insert_recommendation(row: dict) -> None:
+    client = get_client()
+    client.table("recommendations").insert(row).execute()
+
+
 def get_job(job_id: str) -> dict | None:
     client = get_client()
     res = client.table("jobs").select("*").eq("id", job_id).single().execute()
