@@ -34,6 +34,7 @@ import tempfile
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor
+from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import FastAPI, Header, HTTPException, Request
@@ -48,6 +49,7 @@ from supabase_client import (
     download_raw_file,
     get_claims_by_state,
     get_claims_for_job,
+    get_latest_recommendation,
     get_open_claims_for_prospect,
     get_org_prospect_candidates,
     get_prospect,
@@ -63,6 +65,7 @@ from transcribe_deepgram import transcribe_with_deepgram
 from transcribe_gemini import transcribe_with_gemini
 from reconcile_state import ExistingClaim, NewClaim, reconcile_claims
 from recommend import recommend_next_action
+from render import render_brief
 from score import score_prospect
 from verify import verify_claims_batch
 
@@ -295,6 +298,35 @@ def _run_recommend_stage(job_id: str, prospect_id: str) -> None:
     print(f"[job {job_id}] [recommend] next_best_action: {rec.next_best_action}")
 
 
+def _run_render_stage(job_id: str, prospect_id: str, work_dir: Path) -> None:
+    """Pure compilation, zero API calls — everything here was already
+    decided and verified by earlier stages. One current brief per
+    PROSPECT (not per call): each new job overwrites the same Storage
+    path, since a rep always wants the latest picture, not history —
+    the claims table itself already preserves the full history."""
+    prospect = get_prospect(prospect_id)
+    if not prospect:
+        print(f"[job {job_id}] [render] couldn't load prospect {prospect_id}, skipping")
+        return
+
+    open_claims = get_claims_by_state(prospect_id, "open")
+    recommendation = get_latest_recommendation(prospect_id)
+
+    result = render_brief(prospect, open_claims, recommendation)
+
+    brief_path_local = work_dir / "brief.md"
+    brief_path_local.write_text(result.markdown, encoding="utf-8")
+
+    storage_path = f"prospects/{prospect_id}/brief.md"
+    upload_output_file(brief_path_local, storage_path)
+
+    update_prospect(prospect_id, brief_path=storage_path, brief_updated_at=datetime.now(timezone.utc).isoformat())
+    print(
+        f"[job {job_id}] [render] brief written — {len(result.sections_included)} section(s) included, "
+        f"{len(result.sections_omitted)} omitted (no evidence)"
+    )
+
+
 def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
     try:
@@ -344,6 +376,7 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
                 _run_reconcile_stage(job_id, prospect_id)
                 _run_score_stage(job_id, prospect_id)
                 _run_recommend_stage(job_id, prospect_id)
+                _run_render_stage(job_id, prospect_id, work_dir)
 
         md_path, json_path = write_outputs(result, local_path.name, work_dir)
 

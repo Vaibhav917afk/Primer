@@ -127,6 +127,19 @@ def insert_recommendation(row: dict) -> None:
     client.table("recommendations").insert(row).execute()
 
 
+def get_latest_recommendation(prospect_id: str) -> dict | None:
+    client = get_client()
+    res = (
+        client.table("recommendations")
+        .select("*")
+        .eq("prospect_id", prospect_id)
+        .order("created_at", desc=True)
+        .limit(1)
+        .execute()
+    )
+    return res.data[0] if res.data else None
+
+
 def get_job(job_id: str) -> dict | None:
     client = get_client()
     res = client.table("jobs").select("*").eq("id", job_id).single().execute()
