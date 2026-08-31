@@ -46,6 +46,8 @@ from ingest import ingest
 from prospect_matching import ProspectCandidate, find_matching_prospect
 from supabase_client import (
     download_raw_file,
+    get_claims_for_job,
+    get_open_claims_for_prospect,
     get_org_prospect_candidates,
     insert_claims,
     update_claim,
@@ -55,6 +57,7 @@ from supabase_client import (
 )
 from transcribe_deepgram import transcribe_with_deepgram
 from transcribe_gemini import transcribe_with_gemini
+from reconcile_state import ExistingClaim, NewClaim, reconcile_claims
 from verify import verify_claims_batch
 
 app = FastAPI(title="primer backend")
@@ -185,6 +188,53 @@ def _run_verify_stage(job_id: str, transcript_text: str, claims: list[dict]) -> 
         print(f"[job {job_id}] [verify] claim {claim['id']} ({claim['field']}) -> {update.status} (retries={update.retries})")
 
 
+def _run_reconcile_stage(job_id: str, prospect_id: str) -> None:
+    """The actual belief-tracking step: does each claim from this job
+    match something already on file for this prospect (update, don't
+    duplicate), or is it genuinely new? Does anything here explicitly
+    resolve an old claim? Silence never counts as resolution."""
+    fresh_claims = get_claims_for_job(job_id)
+    existing_open = get_open_claims_for_prospect(prospect_id, exclude_job_id=job_id)
+
+    if not fresh_claims:
+        return
+
+    existing_wrapped = [ExistingClaim(id=c["id"], field=c["field"], text=c["text"]) for c in existing_open]
+    new_wrapped = [NewClaim(id=c["id"], field=c["field"], text=c["text"]) for c in fresh_claims]
+
+    outcome = reconcile_claims(existing_wrapped, new_wrapped, GEMINI)
+    for note in outcome.notes:
+        print(f"[job {job_id}] [reconcile] {note}")
+
+    existing_by_id = {c["id"]: c for c in existing_open}
+    new_by_id = {c["id"]: c for c in fresh_claims}
+
+    for match in outcome.matches:
+        if match.matches_existing_id and match.matches_existing_id in existing_by_id:
+            existing_claim = existing_by_id[match.matches_existing_id]
+            new_claim = new_by_id[match.new_claim_id]
+            # the kept row (existing) gets updated to the latest phrasing,
+            # its job_id becomes "most recently confirmed by", mention count grows
+            update_claim(
+                existing_claim["id"],
+                text=new_claim["text"],
+                evidence_line=new_claim.get("evidence_line"),
+                job_id=job_id,
+                mention_count=(existing_claim.get("mention_count") or 1) + 1,
+            )
+            # the new row is a duplicate — kept for history, marked superseded, not deleted
+            update_claim(match.new_claim_id, state="superseded", superseded_by=existing_claim["id"])
+            print(f"[job {job_id}] [reconcile] claim {match.new_claim_id} matched existing {existing_claim['id']} — merged, not duplicated")
+        else:
+            update_claim(match.new_claim_id, state="open", first_job_id=job_id, mention_count=1)
+            print(f"[job {job_id}] [reconcile] claim {match.new_claim_id} is genuinely new")
+
+    for resolved_id in outcome.resolved_existing_ids:
+        if resolved_id in existing_by_id:
+            update_claim(resolved_id, state="resolved")
+            print(f"[job {job_id}] [reconcile] claim {resolved_id} marked resolved")
+
+
 def process_job(job_id: str, storage_path: str, org_id: str | None = None, existing_prospect_id: str | None = None) -> None:
     work_dir = Path(tempfile.mkdtemp(prefix=f"job_{job_id}_"))
     try:
@@ -230,6 +280,8 @@ def process_job(job_id: str, storage_path: str, org_id: str | None = None, exist
 
         if written_claims:
             _run_verify_stage(job_id, speaker_labeled_text, written_claims)
+            if prospect_id:
+                _run_reconcile_stage(job_id, prospect_id)
 
         md_path, json_path = write_outputs(result, local_path.name, work_dir)
 

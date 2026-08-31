@@ -83,6 +83,28 @@ def update_claim(claim_id: str, **fields) -> None:
     client.table("claims").update(fields).eq("id", claim_id).execute()
 
 
+def get_claims_for_job(job_id: str) -> list[dict]:
+    """Fetch claims AFTER verify has updated them — main.py's in-memory
+    list from insert_claims() goes stale the moment verify writes back,
+    so this re-fetches the authoritative current state."""
+    client = get_client()
+    res = client.table("claims").select("*").eq("job_id", job_id).execute()
+    return res.data or []
+
+
+def get_open_claims_for_prospect(prospect_id: str, exclude_job_id: str) -> list[dict]:
+    client = get_client()
+    res = (
+        client.table("claims")
+        .select("*")
+        .eq("prospect_id", prospect_id)
+        .eq("state", "open")
+        .neq("job_id", exclude_job_id)
+        .execute()
+    )
+    return res.data or []
+
+
 def get_job(job_id: str) -> dict | None:
     client = get_client()
     res = client.table("jobs").select("*").eq("id", job_id).single().execute()
