@@ -206,27 +206,21 @@ def verify_claims_batch_core(
 
 
 def _call_gemini_verify_batch(transcript: str, claims: list[dict], settings: GeminiSettings) -> list[VerifyResult]:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
-    def _make_client(api_key: str):
-        return genai.Client(api_key=api_key)
     response = call_with_key_rotation(
-        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_verify_batch_prompt(transcript, claims))
+        lambda key: get_client_for_key(key).models.generate_content(model=settings.model, contents=build_verify_batch_prompt(transcript, claims))
     )
     return parse_verify_batch_response(response.text, expected_count=len(claims))
 
 
 def _call_gemini_reextract_batch(transcript: str, claims: list[dict], settings: GeminiSettings) -> list[ReextractResult]:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
-    def _make_client(api_key: str):
-        return genai.Client(api_key=api_key)
     response = call_with_key_rotation(
-        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_reextract_batch_prompt(transcript, claims))
+        lambda key: get_client_for_key(key).models.generate_content(model=settings.model, contents=build_reextract_batch_prompt(transcript, claims))
     )
     return parse_reextract_batch_response(response.text, expected_count=len(claims))
 

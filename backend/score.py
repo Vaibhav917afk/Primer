@@ -281,27 +281,21 @@ def generate_and_verify_narrative_core(
 
 
 def _call_gemini_narrative(result: ScoreResult, settings: GeminiSettings) -> str:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
-    def _make_client(api_key: str):
-        return genai.Client(api_key=api_key)
     response = call_with_key_rotation(
-        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_narrative_prompt(result))
+        lambda key: get_client_for_key(key).models.generate_content(model=settings.model, contents=build_narrative_prompt(result))
     )
     return parse_narrative_response(response.text)
 
 
 def _call_gemini_verify_narrative(summary: str, result: ScoreResult, settings: GeminiSettings) -> tuple[bool, str | None]:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
-    def _make_client(api_key: str):
-        return genai.Client(api_key=api_key)
     response = call_with_key_rotation(
-        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_verify_narrative_prompt(summary, result))
+        lambda key: get_client_for_key(key).models.generate_content(model=settings.model, contents=build_verify_narrative_prompt(summary, result))
     )
     return parse_verify_narrative_response(response.text)
 

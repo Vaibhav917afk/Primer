@@ -191,14 +191,11 @@ def reconcile_claims_core(
 
 
 def _call_gemini_reconcile(existing: list[ExistingClaim], new: list[NewClaim], settings: GeminiSettings) -> ReconcileOutcome:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
-    def _make_client(api_key: str):
-        return genai.Client(api_key=api_key)
     response = call_with_key_rotation(
-        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_reconcile_prompt(existing, new))
+        lambda key: get_client_for_key(key).models.generate_content(model=settings.model, contents=build_reconcile_prompt(existing, new))
     )
     return parse_reconcile_response(response.text, new)
 

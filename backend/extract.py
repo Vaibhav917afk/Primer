@@ -272,14 +272,11 @@ def merge_chunk_results(chunk_results: list[ChunkExtraction]) -> ExtractionResul
 
 
 def _call_gemini_extract(transcript_chunk: str, settings: GeminiSettings) -> str:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
-    def _make_client(api_key: str):
-        return genai.Client(api_key=api_key)
     response = call_with_key_rotation(
-        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_prompt(transcript_chunk))
+        lambda key: get_client_for_key(key).models.generate_content(model=settings.model, contents=build_prompt(transcript_chunk))
     )
     return response.text
 

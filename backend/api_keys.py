@@ -56,3 +56,40 @@ def mark_exhausted(key: str) -> None:
 def is_quota_error(exc: Exception) -> bool:
     message = str(exc)
     return "RESOURCE_EXHAUSTED" in message or "429" in message
+
+
+# --------------------------------------------------------------------------- #
+# Client cache
+#
+# One genai.Client per API key, reused for the lifetime of the process.
+#
+# This exists because of a real production failure: constructing a NEW
+# client on every call (which the key-rotation refactor originally did)
+# meant each call opened its own httpx connection pool. When an earlier
+# client object was garbage-collected it closed its pool, which could
+# invalidate a connection a newer client was mid-request on, producing
+# "Cannot send a request, as the client has been closed."
+#
+# Caching per key fixes it at the root: clients are never discarded, so
+# their pools are never closed underneath an in-flight request. It's also
+# simply more efficient — connection pools get reused instead of rebuilt
+# on every single call.
+# --------------------------------------------------------------------------- #
+
+_client_cache: dict[str, object] = {}
+_client_lock = threading.Lock()
+
+
+def get_client_for_key(api_key: str):
+    """Returns a cached genai.Client for this key, creating it on first use.
+    Thread-safe: extract.py calls this from parallel worker threads."""
+    with _client_lock:
+        cached = _client_cache.get(api_key)
+        if cached is not None:
+            return cached
+
+        from google import genai
+
+        client = genai.Client(api_key=api_key)
+        _client_cache[api_key] = client
+        return client

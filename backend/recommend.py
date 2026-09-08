@@ -100,14 +100,11 @@ def parse_recommend_response(raw_text: str, open_claims: list[dict]) -> Recommen
 
 
 def _call_gemini_recommend(prospect: dict, open_claims: list[dict], settings: GeminiSettings) -> Recommendation:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
-    def _make_client(api_key: str):
-        return genai.Client(api_key=api_key)
     response = call_with_key_rotation(
-        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_recommend_prompt(prospect, open_claims))
+        lambda key: get_client_for_key(key).models.generate_content(model=settings.model, contents=build_recommend_prompt(prospect, open_claims))
     )
     return parse_recommend_response(response.text, open_claims)
 

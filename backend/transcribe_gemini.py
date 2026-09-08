@@ -73,16 +73,17 @@ def _upload_file(client, source_path: Path):
 
 
 def transcribe_with_gemini(source_path: Path, settings: GeminiSettings) -> GeminiTranscriptResult:
-    from google import genai
-
+    from api_keys import get_client_for_key
     from retry_utils import call_with_key_rotation
 
     # Upload and generation MUST use the same key — an uploaded file is
     # scoped to the project that uploaded it, so rotating keys between the
     # two steps would leave the second key holding a file reference it
-    # can't actually read. Both happen inside one rotation attempt.
+    # can't actually read. Both happen inside one rotation attempt, on one
+    # cached client (see api_keys.get_client_for_key for why caching
+    # matters — per-call clients caused real closed-connection failures).
     def upload_and_generate(api_key: str):
-        client = genai.Client(api_key=api_key)
+        client = get_client_for_key(api_key)
         print(f"[gemini] uploading {source_path.name} for model={settings.model}")
         uploaded = _upload_file(client, source_path)
         return client.models.generate_content(model=settings.model, contents=[uploaded, PROMPT])
