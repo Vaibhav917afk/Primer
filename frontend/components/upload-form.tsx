@@ -48,7 +48,8 @@ export function UploadForm({ onQueued }: { onQueued?: (jobId: string) => void })
 
     try {
       // 1. Upload the raw file to Storage
-      const storagePath = `${Date.now()}-${file.name}`;
+      const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, "_");
+      const storagePath = `${Date.now()}-${safeName}`;
       const { error: uploadError } = await supabase.storage
         .from("raw-uploads")
         .upload(storagePath, file, { upsert: false });

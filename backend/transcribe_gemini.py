@@ -73,24 +73,21 @@ def _upload_file(client, source_path: Path):
 
 
 def transcribe_with_gemini(source_path: Path, settings: GeminiSettings) -> GeminiTranscriptResult:
-    if not settings.api_key:
-        raise RuntimeError(
-            "GEMINI_API_KEY is not set. Get a free key at "
-            "https://aistudio.google.com/apikey and put it in .env"
-        )
-
     from google import genai
 
-    from retry_utils import call_with_retry
+    from retry_utils import call_with_key_rotation
 
-    client = genai.Client(api_key=settings.api_key)
+    # Upload and generation MUST use the same key — an uploaded file is
+    # scoped to the project that uploaded it, so rotating keys between the
+    # two steps would leave the second key holding a file reference it
+    # can't actually read. Both happen inside one rotation attempt.
+    def upload_and_generate(api_key: str):
+        client = genai.Client(api_key=api_key)
+        print(f"[gemini] uploading {source_path.name} for model={settings.model}")
+        uploaded = _upload_file(client, source_path)
+        return client.models.generate_content(model=settings.model, contents=[uploaded, PROMPT])
 
-    print(f"[gemini] uploading {source_path.name} for model={settings.model}")
-    uploaded = _upload_file(client, source_path)
-
-    response = call_with_retry(
-        lambda: client.models.generate_content(model=settings.model, contents=[uploaded, PROMPT])
-    )
+    response = call_with_key_rotation(upload_and_generate)
 
     raw_text = response.text
     try:

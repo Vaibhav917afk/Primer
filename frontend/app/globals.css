@@ -4,18 +4,17 @@
 
 @layer base {
   * {
-    @apply border-ink-border;
+    @apply border-panel-border;
   }
   body {
-    @apply bg-ink text-cream font-sans;
+    @apply bg-paper text-ink font-sans;
     font-feature-settings: "cv02", "cv03", "cv04", "cv11";
   }
   ::selection {
-    @apply bg-gold/30 text-cream;
+    @apply bg-gold/20 text-ink;
   }
-  /* visible keyboard focus everywhere — never remove this */
   :focus-visible {
-    outline: 2px solid #cc9a4e;
+    outline: 2px solid #a6742c;
     outline-offset: 2px;
   }
 }

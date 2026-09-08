@@ -247,11 +247,23 @@ def parse_verify_narrative_response(raw_text: str) -> tuple[bool, str | None]:
     return bool(parsed.get("accurate")), parsed.get("reason")
 
 
+# The narrative is a ONE-SENTENCE human-readable gloss on numbers that were
+# already computed deterministically. It was originally allowed 2 retries
+# (up to 6 API calls), which measured at ~4.5 minutes — over half the total
+# runtime of an entire job — and still frequently ended "partial" anyway.
+#
+# Cut to 1 retry: worst case 4 calls instead of 6, and a "partial" narrative
+# is a perfectly acceptable outcome since it's clearly flagged in the UI and
+# the actual SCORES are never affected by it. This is the cheapest large
+# speed win available without changing any behavior that matters.
+NARRATIVE_MAX_RETRIES = 1
+
+
 def generate_and_verify_narrative_core(
     result: ScoreResult,
     generate_fn: Callable[[ScoreResult], str],
     verify_fn: Callable[[str, ScoreResult], tuple[bool, str | None]],
-    max_retries: int = 2,
+    max_retries: int = NARRATIVE_MAX_RETRIES,
 ) -> NarrativeResult:
     """Bounded retry, same pattern as verify.py's claim loop: generate,
     check, regenerate if needed, never loop forever."""
@@ -271,11 +283,12 @@ def generate_and_verify_narrative_core(
 def _call_gemini_narrative(result: ScoreResult, settings: GeminiSettings) -> str:
     from google import genai
 
-    from retry_utils import call_with_retry
+    from retry_utils import call_with_key_rotation
 
-    client = genai.Client(api_key=settings.api_key)
-    response = call_with_retry(
-        lambda: client.models.generate_content(model=settings.model, contents=build_narrative_prompt(result))
+    def _make_client(api_key: str):
+        return genai.Client(api_key=api_key)
+    response = call_with_key_rotation(
+        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_narrative_prompt(result))
     )
     return parse_narrative_response(response.text)
 
@@ -283,11 +296,12 @@ def _call_gemini_narrative(result: ScoreResult, settings: GeminiSettings) -> str
 def _call_gemini_verify_narrative(summary: str, result: ScoreResult, settings: GeminiSettings) -> tuple[bool, str | None]:
     from google import genai
 
-    from retry_utils import call_with_retry
+    from retry_utils import call_with_key_rotation
 
-    client = genai.Client(api_key=settings.api_key)
-    response = call_with_retry(
-        lambda: client.models.generate_content(model=settings.model, contents=build_verify_narrative_prompt(summary, result))
+    def _make_client(api_key: str):
+        return genai.Client(api_key=api_key)
+    response = call_with_key_rotation(
+        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_verify_narrative_prompt(summary, result))
     )
     return parse_verify_narrative_response(response.text)
 

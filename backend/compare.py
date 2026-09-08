@@ -74,9 +74,11 @@ def _arbitrate(wx_text: str, gm_text: str, settings: GeminiSettings) -> tuple[st
     try:
         from google import genai
 
-        from retry_utils import call_with_retry
+        from retry_utils import call_with_key_rotation
 
-        client = genai.Client(api_key=settings.api_key)
+        def _make_client(api_key: str):
+            return genai.Client(api_key=api_key)
+
         prompt = (
             "Two speech-to-text systems transcribed the same short audio "
             "segment and disagree. Pick whichever is more plausible as "
@@ -84,7 +86,7 @@ def _arbitrate(wx_text: str, gm_text: str, settings: GeminiSettings) -> tuple[st
             "part of the truth. Reply with ONLY the corrected text, nothing else.\n\n"
             f"System A: {wx_text}\nSystem B: {gm_text}"
         )
-        response = call_with_retry(lambda: client.models.generate_content(model=settings.model, contents=prompt))
+        response = call_with_key_rotation(lambda key: _make_client(key).models.generate_content(model=settings.model, contents=prompt))
         return response.text.strip(), "arbitrated"
     except Exception as exc:  # noqa: BLE001
         return wx_text, f"arbitration failed, kept deepgram text ({exc})"

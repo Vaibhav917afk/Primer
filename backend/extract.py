@@ -39,12 +39,16 @@ from __future__ import annotations
 
 import json
 import re
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 
 from config import GeminiSettings
 from preprocess import Chunk, chunk_transcript
 
 ITEM_FIELDS = ["interest", "objection", "pain_point", "commitment", "open_question", "risk_signal"]
+
+# Bounded concurrency for chunk extraction — see extract_from_transcript.
+MAX_PARALLEL_CHUNKS = 4
 PROSPECT_ONLY_FIELDS = {"interest", "objection", "pain_point", "risk_signal"}
 ROLE_VALUES = {"rep", "prospect", "other", "unknown"}
 
@@ -270,11 +274,12 @@ def merge_chunk_results(chunk_results: list[ChunkExtraction]) -> ExtractionResul
 def _call_gemini_extract(transcript_chunk: str, settings: GeminiSettings) -> str:
     from google import genai
 
-    from retry_utils import call_with_retry
+    from retry_utils import call_with_key_rotation
 
-    client = genai.Client(api_key=settings.api_key)
-    response = call_with_retry(
-        lambda: client.models.generate_content(model=settings.model, contents=build_prompt(transcript_chunk))
+    def _make_client(api_key: str):
+        return genai.Client(api_key=api_key)
+    response = call_with_key_rotation(
+        lambda key: _make_client(key).models.generate_content(model=settings.model, contents=build_prompt(transcript_chunk))
     )
     return response.text
 
@@ -284,13 +289,39 @@ def extract_from_transcript(transcript_text: str, settings: GeminiSettings) -> E
         raise RuntimeError("GEMINI_API_KEY is not set — check .env / Render environment")
 
     chunks: list[Chunk] = chunk_transcript(transcript_text)
-    chunk_results: list[ChunkExtraction] = []
 
-    for i, chunk in enumerate(chunks):
+    # Chunks are INDEPENDENT of each other — each is extracted purely from
+    # its own text, nothing carries between them (merging happens after,
+    # in merge_chunk_results). So they can safely run in parallel.
+    #
+    # This is the single biggest speed win in the pipeline for long
+    # recordings: a 40-minute call might be 8 chunks, and sequentially
+    # that was 8 x ~80s = ~11 minutes just for extraction. In parallel
+    # it's roughly the time of ONE chunk.
+    #
+    # Capped at MAX_PARALLEL_CHUNKS because unbounded parallelism against
+    # a rate-limited API makes 429s MORE likely, not less — the goal is
+    # concurrency, not a thundering herd.
+    def extract_one(indexed_chunk: tuple[int, Chunk]) -> tuple[int, ChunkExtraction]:
+        i, chunk = indexed_chunk
         raw = _call_gemini_extract(chunk.text, settings)
         try:
-            chunk_results.append(parse_extraction_response(raw))
+            return i, parse_extraction_response(raw)
         except (json.JSONDecodeError, AttributeError) as exc:
             raise RuntimeError(f"chunk {i}: Gemini didn't return parseable JSON: {raw[:300]}") from exc
 
-    return merge_chunk_results(chunk_results)
+    if len(chunks) == 1:
+        # Don't pay thread-pool overhead for the common single-chunk case.
+        _, only = extract_one((0, chunks[0]))
+        return merge_chunk_results([only])
+
+    print(f"[extract] processing {len(chunks)} chunks in parallel (max {MAX_PARALLEL_CHUNKS} at a time)")
+    with ThreadPoolExecutor(max_workers=min(MAX_PARALLEL_CHUNKS, len(chunks))) as pool:
+        indexed_results = list(pool.map(extract_one, enumerate(chunks)))
+
+    # Restore original chunk order — pool.map preserves order, but sorting
+    # explicitly makes that guarantee obvious rather than implicit, since
+    # merge_chunk_results depends on first-non-null-wins semantics where
+    # order genuinely matters.
+    indexed_results.sort(key=lambda pair: pair[0])
+    return merge_chunk_results([result for _, result in indexed_results])
