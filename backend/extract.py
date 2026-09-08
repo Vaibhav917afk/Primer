@@ -285,8 +285,14 @@ def _call_gemini_extract(transcript_chunk: str, settings: GeminiSettings) -> str
 
 
 def extract_from_transcript(transcript_text: str, settings: GeminiSettings) -> ExtractionResult:
-    if not settings.api_key:
-        raise RuntimeError("GEMINI_API_KEY is not set — check .env / Render environment")
+    # Checks whether ANY key is configured (single or rotated), not just
+    # the legacy single GEMINI_API_KEY — a deployment using GEMINI_API_KEYS
+    # has no value in settings.api_key at all, and gating on that variable
+    # would falsely report "no key configured" while rotation held several.
+    from api_keys import get_available_keys
+
+    if not get_available_keys():
+        raise RuntimeError("No Gemini API key configured — set GEMINI_API_KEY or GEMINI_API_KEYS")
 
     chunks: list[Chunk] = chunk_transcript(transcript_text)
 

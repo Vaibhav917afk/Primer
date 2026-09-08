@@ -14,6 +14,7 @@ from dataclasses import dataclass, field
 
 from rapidfuzz import fuzz
 
+from api_keys import get_available_keys
 from config import CompareSettings, GeminiSettings
 from transcribe_whisperx import Segment
 
@@ -129,7 +130,10 @@ def compare_transcripts(
             agreements += 1
         else:
             disagreements += 1
-            if compare_settings.arbitrate_disagreements and gemini_settings.api_key:
+            # Same reason as extract.py: check whether ANY key is available
+            # rather than the legacy single-key variable, or arbitration
+            # would silently never run on a GEMINI_API_KEYS deployment.
+            if compare_settings.arbitrate_disagreements and get_available_keys():
                 text, reason = _arbitrate(wx.text, match.text, gemini_settings)
                 notes.append(f"segment {wx.start:.1f}-{wx.end:.1f}s: {reason}")
                 status = "resolved" if reason == "arbitrated" else "low_confidence"
